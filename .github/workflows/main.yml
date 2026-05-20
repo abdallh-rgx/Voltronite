@@ -2,6 +2,11 @@ name: run
 
 on:
   workflow_dispatch:
+    inputs:
+      matchmaking:
+        description: "Enable matchmaking"
+        required: true
+        default: "true"
 
 jobs:
   backend:
@@ -12,7 +17,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Bun (FIXED)
+      - name: Create .env
+        run: |
+          cat > .env << EOF
+          # Ports
+          PORT=3551
+          MATCHMAKER_PORT=8080
+
+          # Matchmaking toggle
+          MATCHMAKING=${{ github.event.inputs.matchmaking }}
+
+          # Game stuff
+          GAMESERVER_IP=147.185.221.180:34538
+          MATCHMAKER_IP=ws://127.0.0.1:8080
+          EOF
+
+          echo "===== .env ====="
+          cat .env
+
+      - name: Install Bun
         run: |
           curl -fsSL https://bun.sh/install | bash
           export PATH="$HOME/.bun/bin:$PATH"
@@ -28,22 +51,39 @@ jobs:
           chmod +x cloudflared-linux-amd64
           mv cloudflared-linux-amd64 cloudflared
 
-      - name: Start Backend + Tunnel
+      - name: Start Backend
         run: |
-          bun run src/app.ts > server.log 2>&1 &
-          sleep 10
-          ./cloudflared tunnel --url http://localhost:3551 > tunnel.log 2>&1 &
+          nohup bun run src/app.ts > server.log 2>&1 &
           sleep 15
+
+      - name: Open Tunnel For Backend Port 3551
+        run: |
+          nohup ./cloudflared tunnel --url http://localhost:3551 > tunnel_backend.log 2>&1 &
+          sleep 15
+
           echo "========== BACKEND LINK =========="
-          grep -o 'https://[-a-z0-9]*\.trycloudflare.com' tunnel.log | head -n 1 || echo "NO LINK FOUND"
+          grep -o 'https://[-a-z0-9]*\.trycloudflare.com' tunnel_backend.log | head -n 1 || echo "NO LINK FOUND"
+          echo "=================================="
+
+      - name: Open Tunnel For Matchmaker Port 8080
+        run: |
+          nohup ./cloudflared tunnel --url http://localhost:8080 > tunnel_matchmaker.log 2>&1 &
+          sleep 15
+
+          echo "======== MATCHMAKER LINK ========="
+          grep -o 'https://[-a-z0-9]*\.trycloudflare.com' tunnel_matchmaker.log | head -n 1 || echo "NO LINK FOUND"
           echo "=================================="
 
       - name: Show Logs
         run: |
           echo "===== SERVER LOG ====="
           cat server.log || true
-          echo "===== TUNNEL LOG ====="
-          cat tunnel.log || true
+
+          echo "===== BACKEND TUNNEL LOG ====="
+          cat tunnel_backend.log || true
+
+          echo "===== MATCHMAKER TUNNEL LOG ====="
+          cat tunnel_matchmaker.log || true
 
       - name: Keep Alive
         run: sleep 21600
